@@ -5,9 +5,13 @@ import re
 import os, shutil
 import gini
 
-def pd2vw(data, X, label, out):
+def pd2vw(data, X, out, label=None):
     tmp = data.copy()
-    ordering = [label]
+    if label:
+    	ordering = [label]
+    else:
+    	ordering = []
+
     for vtype, namespaces in X.items():
         for namespace, labels in namespaces.items():
             ordering.append(namespace)
@@ -26,18 +30,24 @@ def pd2vw(data, X, label, out):
 
 
 
-def vwRegress(data, out, passes=4, holdout=10, bit=25, l1=0, l2=0, learning_rate=0.5):
+def vwRegress(data, out, passes=4, holdout=10, bit=25, l1=0, l2=0, q=None, learning_rate=0.5):
     path = '../tmp/' + out
     if not os.path.exists(path):
         os.makedirs(path)
     else:
         shutil.rmtree(path)
         os.makedirs(path)
+
+    # deal with q term
+    if q:
+    	q = ' '.join(['-q '+x for x in q.split(' ')])
+    else:
+    	q = ''
         
     command = "vw -d ../tmp_data/{0} --passes {1} -k -c --holdout_period {2} -b {3} -f {4}/model " + \
               "--readable_model {4}/model.r " + \
-              "--loss_function squared --l1 {5} --l2 {6} -l {7}"
-    command = command.format(data, passes, holdout, bit, path, l1, l2, learning_rate)
+              "--loss_function squared --l1 {5} --l2 {6} -l {7} {8}"
+    command = command.format(data, passes, holdout, bit, path, l1, l2, learning_rate, q)
     flag = subprocess.call(command, shell=True, stderr=open('{}/log'.format(path), 'w'))
     
     loss = ''
