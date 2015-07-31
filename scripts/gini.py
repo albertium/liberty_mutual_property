@@ -1,6 +1,7 @@
 import numpy as np
 
 def gini_coef(target, pred):
+    """target, input: ndarray"""
     assert len(target) == len(pred)
     idx = np.lexsort((target, pred))
     cum = np.cumsum(target[idx])
