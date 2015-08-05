@@ -10,7 +10,7 @@ class sofia_kmeans(BaseEstimator, ClusterMixin, TransformerMixin):
 	"""
 	wrapper for sofia kmean via harddrive
 	"""
-	def __init__(self, name='sofia_0', n_clusters=10, batch_size=100, iterations=100):
+	def __init__(self, name='sofia_0', n_clusters=10, batch_size=100, iterations=100, mapping_param=0.5, mapping_threshold=0.01):
 		self.command = 'sofia-kmeans'
 		self.command += ' --k ' + str(n_clusters) \
 					 +  ' --init_type optimized_kmeans_pp' \
@@ -20,7 +20,10 @@ class sofia_kmeans(BaseEstimator, ClusterMixin, TransformerMixin):
 					 +  ' --objective_after_init' \
 					 +  ' --objective_after_training'
 
+		self.mapping_param = mapping_param
+		self.mapping_threshold = mapping_threshold
 		self.path = '../tmp/' + name + '/'
+
 		if not os.path.exists(self.path):
 			os.makedirs(self.path)
 		else:
@@ -28,15 +31,15 @@ class sofia_kmeans(BaseEstimator, ClusterMixin, TransformerMixin):
 			os.makedirs(self.path)
 
 
-	def _fit(self, filename):
+	def _fit(self, filename, dimensionality):
 		self.command_train = self.command \
 				+ ' --training_file ' + self.path + filename \
 				+ ' --model_out ' + self.path + 'model' \
-				+ ' --dimensionality ' + str(data.shape[1])
+				+ ' --dimensionality ' + str(dimensionality)
 		print(self.command_train)
-		flag = subprocess.call(self.command_train, shell=True, stdout=open(self.path+'out', 'w'))
+		flag = subprocess.call(self.command_train, shell=True, stdout=open(self.path+'train.out', 'w'))
 		if flag == 0:
-			with open(self.path+'out', 'r') as f:
+			with open(self.path+'train.out', 'r') as f:
 				out = ' '.join(list(f))
 				start = re.findall('Objective function value for initialization: ([0-9.e+]+)', out)[0]
 				end = re.findall('Objective function value for training: ([0-9.e+]+)', out)[0]
@@ -45,10 +48,31 @@ class sofia_kmeans(BaseEstimator, ClusterMixin, TransformerMixin):
 		return flag
 
 
-	def fit(self, data):
-		_pd2svm(self.path + 'train.libsvm', data)
-		if self._fit(self.path + 'train.libsvm') != 0:
-			raise RuntimeError
+	def _transform(self, filename):
+		self.command_test = ['sofia-kmeans',
+								'--model_in', self.path + 'model',
+								'--test_file', self.path + filename,
+								'--cluster_mapping_out', self.path + 'mapping',
+								'--cluster_mapping_type rbf_kernel',
+								'--cluster_mapping_param', str(self.mapping_param),
+								'--cluster_mapping_threshold', str(self.mapping_threshold)]
+		self.command_test = ' '.join(self.command_test)
+
+		print(self.command_test)
+		flag = subprocess.call(self.command_test, shell=True, stdout=open(self.path+'test.out', 'w'))
+		return flag
+
+	def fit(self, X, y=None):
+		dim = _pd2svm(self.path + 'train.libsvm', X)
+		flag = self._fit('train.libsvm', dim)
+		if flag != 0:
+			raise RuntimeError('training runtime error')
+
+	def transform(self, X):
+		dim = _pd2svm(self.path + 'test.libsvm', X)	
+		flag = self._transform('test.libsvm')
+		if flag != 0:
+			raise RuntimeError('testing runtime error')
 
 
 
@@ -66,3 +90,5 @@ def _pd2svm(filename, data):
     with open(filename, 'w') as f:
         for row in data:
             f.write(frmt.format(*row))
+
+    return data.shape[1]
