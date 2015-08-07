@@ -3,6 +3,7 @@ import shutil
 import subprocess
 
 import re
+import copy
 
 import numpy as np
 from numpy.linalg import eig
@@ -189,7 +190,7 @@ class Xgbooster(BaseEstimator, RegressorMixin):
 
 	def fit(self, X, y):
 		dTrain = xgb.DMatrix(X, label=y)
-		self.model = xgb.train(param, dTrain, self.n_trees)
+		self.model = xgb.train(self.param, dTrain, self.n_trees)
 		
 	def predict(self, X):
 		dTest = xgb.DMatrix(X)
@@ -200,10 +201,11 @@ class Xgbooster(BaseEstimator, RegressorMixin):
 # kfold transformer
 
 class KFoldTransformer(BaseEstimator, TransformerMixin):
-	def __init__(self, base_learner, K=5, **kwargs):
-		self.base_learner = base_learner
+	def __init__(self, base_learner, K=2, **kwargs):
+		#self.base_learner = base_learner
 		self.K = K
 		self.learners = []
+		print(base_learner)
 		for i in range(K):
 			self.learners.append(base_learner(**kwargs))
 			
@@ -215,14 +217,14 @@ class KFoldTransformer(BaseEstimator, TransformerMixin):
 			self.learners[i].fit(X[train, :], y[train])
 			yhat[test] = self.learners[i].predict(X[test, :])
 
-		return yhat
+		return np.expand_dims(yhat, axis=1)
 			
 	def transform(self, X):
 		yhat = np.zeros(X.shape[0])
 		for i in range(self.K):
 			yhat += self.learners[i].predict(X)
 
-		return yhat / self.K
+		return np.expand_dims(yhat, axis=1) / self.K
 
 
 # ====================================================================
