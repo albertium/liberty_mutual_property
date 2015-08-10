@@ -11,9 +11,14 @@ from scipy.stats import rankdata
 
 import pandas as pd
 
+import gini
+
 from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin, RegressorMixin
 from sklearn.datasets import load_svmlight_file
 from sklearn.cross_validation import StratifiedKFold, KFold
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.linear_model import Lasso
 
 import xgboost as xgb
 
@@ -38,7 +43,7 @@ def pd2svm(filename, data):
 
 
 class Whitener(BaseEstimator, ClusterMixin, TransformerMixin):
-	def __init__(self, var_e=0.01, eig_e=1E-5):
+	def __init__(self, var_e=1E-5, eig_e=1E-5):
 		self.var_e = var_e
 		self.eig_e = eig_e
 
@@ -198,33 +203,124 @@ class Xgbooster(BaseEstimator, RegressorMixin):
 
 
 # ====================================================================
+# xgboost transformer
+
+class XgbTransformer(BaseEstimator, TransformerMixin):
+	def __init__(self, n_trees=30, **kwargs):
+		self.param = kwargs
+		self.n_trees = n_trees
+
+	def fit_transform(self, X, y):
+		X, y = np.array(X), np.array(y)
+		dTrain = xgb.DMatrix(X, label=y)
+		self.model = xgb.train(self.param, dTrain, self.n_trees)
+		code = self.model.predict(dTrain, pred_leaf=True)
+
+		code = pd.DataFrame(code)
+		for x in code.columns:
+			code[x] = code[x].astype('category')
+
+		code = pd.get_dummies(code)
+		self.cols = code.columns
+		return code.values
+
+	def transform(self, X):
+		X = np.array(X)
+		dTrain = xgb.DMatrix(X)
+		code = self.model.predict(dTrain, pred_leaf=True)
+
+		code = pd.DataFrame(code)
+		for x in code.columns:
+			code[x] = code[x].astype('category')
+
+		code = pd.get_dummies(code)
+		missing = list(set(self.cols).difference(set(code.columns)))
+		for x in missing:
+			code[x] = 0
+		return code[self.cols].values
+
+# ====================================================================
 # kfold transformer
 
 class KFoldTransformer(BaseEstimator, TransformerMixin):
-	def __init__(self, base_learner, K=2, **kwargs):
-		#self.base_learner = base_learner
+	def __init__(self, base_estimator, K=2, **kwargs):
 		self.K = K
-		self.learners = []
-		print(base_learner)
+		self.base_estimator = base_estimator
+		self.estimators = []
+
+		base_estimator_ = {'reg:RF': RandomForestRegressor,
+						   'reg:ET': ExtraTreesRegressor,
+						   'reg:XGB': Xgbooster,
+						   'reg:KNN': KNeighborsRegressor,
+						   'reg:L1': Lasso}
+
 		for i in range(K):
-			self.learners.append(base_learner(**kwargs))
+			self.estimators.append(base_estimator_[base_estimator](**kwargs))
 			
 
 	def fit_transform(self, X, y):
+		X, y = np.array(X), np.array(y)
 		yhat = np.zeros(len(y))
 		skf = KFold(len(y), n_folds=self.K)
 		for i, (train, test) in enumerate(skf):
-			self.learners[i].fit(X[train, :], y[train])
-			yhat[test] = self.learners[i].predict(X[test, :])
+			self.estimators[i].fit(X[train, :], y[train])
+			yhat[test] = self.estimators[i].predict(X[test, :])
 
 		return np.expand_dims(yhat, axis=1)
 			
 	def transform(self, X):
 		yhat = np.zeros(X.shape[0])
 		for i in range(self.K):
-			yhat += self.learners[i].predict(X)
+			yhat += self.estimators[i].predict(X)
 
 		return np.expand_dims(yhat, axis=1) / self.K
+
+
+# ====================================================================
+# K-fold Estimator 
+
+
+class KFoldEstimator(BaseEstimator, TransformerMixin):
+	def __init__(self, base_estimator, K=2, **kwargs):
+		self.K = K
+		self.base_estimator = base_estimator
+		self.estimators = []
+
+		base_estimator_ = {'reg:RF': RandomForestRegressor,
+						   'reg:ET': ExtraTreesRegressor,
+						   'reg:XGB': Xgbooster}
+
+		for i in range(K):
+			self.estimators.append(base_estimator_[base_estimator](**kwargs))
+			
+
+	def fit(self, X, y):
+		skf = KFold(len(y), n_folds=self.K)
+		for i, (train, test) in enumerate(skf):
+			self.estimators[i].fit(X[train, :], y[train])
+
+
+	def predict(self, X):
+		yhat = np.zeros(X.shape[0])
+		for i in range(self.K):
+			yhat += self.estimators[i].predict(X)
+
+		return yhat / self.K
+
+
+# ====================================================================
+# cross validation
+
+def cross_validate(estimator, X, y, nfold=5, feval=gini.normalized_gini):
+	X, y = np.array(X), np.array(y)
+	scores = []
+	kf = KFold(X.shape[0], nfold)
+	for idx_train, idx_test in kf:
+	    estimator.fit(X[idx_train, :], y[idx_train])
+	    result = estimator.predict(X[idx_test, :])
+	    scores.append(feval(y[idx_test], result))
+
+	return np.mean(scores)
 
 
 # ====================================================================

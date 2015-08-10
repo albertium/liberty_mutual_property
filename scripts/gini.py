@@ -3,6 +3,7 @@ from sklearn.metrics import make_scorer
 
 def gini_coef(target, pred):
     """target, input: ndarray"""
+    target, pred = np.array(target), np.array(pred)
     assert len(target) == len(pred)
     idx = np.lexsort((target, pred))
     cum = np.cumsum(target[idx])
