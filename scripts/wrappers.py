@@ -92,6 +92,49 @@ class Whitener(BaseEstimator, ClusterMixin, TransformerMixin):
 		return np.dot(X, np.dot(self.V / self.D_sqrt, self.V.T))
 
 
+def generatePrimes(n):
+	sieve = np.ones(n/3 + (n%6==2), dtype=np.bool)
+	sieve[0] = False
+	for i in range(int(n**0.5/3)+1):
+		if sieve[i]:
+			k=3*i+1|1
+			sieve[((k*k)/3)::2*k] = False
+			sieve[(k*k+4*k-2*k*(i&1))/3::2*k] = False
+													
+	for x in np.r_[2,3,((3*np.nonzero(sieve)[0]+1)|1)]:
+		yield x
+
+
+def calPowerCount(X, degree=2):
+	X = X.copy()
+	prime = generatePrimes(200000)
+
+	# encode levels with prime numbers
+	for col in X.columns:
+		mapping = {level: next(prime) for level in X[col].unique()}
+		X[col] = X[col].map(mapping)
+
+	# calculate Power terms
+	a = X.values
+	b = X.values[:, :, np.newaxis]
+	for i in range(degree-1):
+		a = (a[:, np.newaxis, :] * b).reshape(a.shape[0], -1)
+
+	# remove duplicates
+	a = a.T
+	b = np.ascontiguousarray(a).view(np.dtype((np.void, a.dtype.itemsize * a.shape[1])))
+	a = np.unique(b).view(a.dtype).reshape(-1, a.shape[1]).T
+
+	# get count
+	a = pd.DataFrame(a)
+	for col in a.columns:
+		mapping = a[col].value_counts().to_dict()
+		a[col] = a[col].map(mapping)
+
+	a = a.rename(columns=lambda x: 'count_' + str(degree) + 'way_' + str(x))
+	return a
+
+
 # ====================================================================
 # sofia wrapper
 class sofia_kmeans(BaseEstimator, ClusterMixin, TransformerMixin):
