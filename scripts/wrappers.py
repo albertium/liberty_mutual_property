@@ -40,6 +40,27 @@ def pd2svm(filename, data):
             f.write(frmt.format(*row))
 
     return data.shape[1]
+	
+
+def py2vw2(data, label=None, namespaces=None):
+	data = data.copy()
+	if not namespaces:
+		namespaces = {'': data.columns.tolist()}
+
+	if label is not None:
+		frmt = '{} '
+		features = ['__LABEL__']
+		data['__LABEL__'] = label
+	else:
+		frmt = ''
+		features = []
+
+	for ns, cols in namespaces.items():
+		frmt += '|' + ns + ' '
+		frmt += ''.join([str(i)+('_{} ' if dtype=='object' else ':{} ') for i, dtype in enumerate(data[cols].dtypes)])
+		features += cols
+
+	return data[features].apply(lambda x: frmt.format(*x), axis=1).tolist()
 
 
 class Whitener(BaseEstimator, ClusterMixin, TransformerMixin):
@@ -351,6 +372,75 @@ class KFoldEstimator(BaseEstimator, TransformerMixin):
 		return yhat / self.K
 
 
+# ====================================================================
+# vowpal wabbit wrapper
+
+class VWRegressor(BaseEstimator, RegressorMixin):
+	def __init__(self, l1=1E-5, l2=1E-5, loss='squared', passes=5, bit=25, minibatch=1, interaction=None, namespaces=None):
+		self.l1 = l1
+		self.l2 = l2
+		self.loss = loss
+		self.passes = passes
+		self.bit = bit
+		self.minibatch = minibatch
+		self.interaction = interaction
+		self.namespaces = namespaces
+
+	def fit(self, X, y):
+		# convert to vw format
+		vwTrain = py2vw2(X, y, self.namespaces)
+
+		# call vw subprocess
+		cmd = [
+			'vw', 
+			'--holdout_off',
+			'-f', 'tmp.model',
+			'-b', str(self.bit),
+			#'--minibatch', str(self.minibatch),
+			'--loss_function', self.loss,
+			'--l1', str(self.l1),
+			'--l2', str(self.l2)]
+
+		if self.interaction:
+			cmd += ['-q'] + re.sub(' +', ' ', self.interaction).strip().replace(' ', ' -q ').split(' ')
+
+		proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+		# multiple passes
+		for _ in range(self.passes):
+			proc.stdin.write('\n'.join(vwTrain).encode('UTF-8'))
+
+		proc.stdin.flush()
+		out, err = proc.communicate()
+		self.msg = err.decode('UTF-8')
+
+		# retrieve model and clean up
+		with open('tmp.model', 'rb') as f:
+			self.model = f.readlines()
+
+		os.remove('tmp.model')
+
+	def predict(self, X):
+		vwTest = py2vw2(X, namespaces=self.namespaces)
+		with open('tmp.model', 'wb') as f:
+			f.writelines(self.model)
+
+		cmd = [
+			'vw',
+			'-t',
+			'-i', 'tmp.model',
+			'-p', '/dev/stdout']
+
+		proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		pred, err = proc.communicate(('\n'.join(vwTest) + '\n').encode('UTF-8'))
+
+		os.remove('tmp.model')
+
+		try:
+			return [float(x) for x in pred.decode('UTF-8').split('\n')[:-1]]
+		except:
+			return pred
+		
 # ====================================================================
 # cross validation
 
